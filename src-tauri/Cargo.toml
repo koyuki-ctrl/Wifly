@@ -1,0 +1,43 @@
+[package]
+name = "wifly"
+version = "0.1.0"
+description = "Wifly — Wi-Fi file sharing hotspot"
+authors = ["you"]
+edition = "2021"
+
+[lib]
+name = "wifly_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "process"] }
+actix-web = "4"
+actix-files = "0.6"
+actix-cors = "0.7"
+actix-multipart = "0.7"
+local-ip-address = "0.6"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+futures-util = "0.3"
+sanitize-filename = "0.6"
+actix-web-actors = "4.3.1"
+actix = "0.13.5"
+
+[profile.release]
+opt-level = 3        # Maximum speed
+lto = true          # Full Link Time Optimization (smaller and faster)
+codegen-units = 1   # Better optimization
+panic = "abort"     # Remove unwinding (smaller)
+strip = true        # Remove symbols (smaller)
+incremental = false # Disable incremental compilation for better optimization
+
+

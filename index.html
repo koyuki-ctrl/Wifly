@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="stylesheet" href="/src/styles.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Wifly — Application Desktop</title>
+  <script type="module" src="/src/main.js" defer></script>
+</head>
+
+<body x-data="wiflyApp()" @DOMContentLoaded.window="init()">
+
+  <!-- ═══════════════════════════════════
+         TITLE BAR — Custom desktop window controls
+    ════════════════════════════════════ -->
+  <div class="titlebar" data-tauri-drag-region>
+    <div class="titlebar-logo">
+      <img src="/logo.png?v=1" alt="Logo" style="width: 14px; height: 14px; display: block; pointer-events: none;">
+    </div>
+    <div class="titlebar-title">Wifly<span>v1.0.0</span></div>
+    <div class="titlebar-controls">
+      <button class="tb-btn" title="Minimize" id="minimize" @click="minimizeWindow()">
+        <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round">
+          <line x1="2" y1="6" x2="10" y2="6" />
+        </svg>
+      </button>
+      <button class="tb-btn" title="Maximize" id="maximize" @click="toggleMaximize()">
+        <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round">
+          <rect x="2.5" y="2.5" width="7" height="7" rx="1" />
+        </svg>
+      </button>
+      <button class="tb-btn tb-close" title="Close" id="close" @click="closeWindow()">
+        <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round">
+          <line x1="2.5" y1="2.5" x2="9.5" y2="9.5" />
+          <line x1="9.5" y1="2.5" x2="2.5" y2="9.5" />
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════
+         MAIN WRAPPER (sidebar + app shell)
+    ════════════════════════════════════ -->
+  <div class="main-wrap">
+
+    <!-- ═══ SIDEBAR ═══ -->
+    <aside class="sidebar">
+      <div class="sidebar-sep"></div>
+
+      <button class="nav-btn" :class="{ active: page === 'dashboard' }" @click="page = 'dashboard'" title="">
+        <i data-lucide="layout-dashboard"></i>
+        <span class="nb-tooltip">Dashboard</span>
+      </button>
+
+      <button class="nav-btn" :class="{ active: page === 'devices' }" @click="page = 'devices'" title="">
+        <i data-lucide="smartphone"></i>
+        <span class="nb-tooltip">Connected Devices</span>
+      </button>
+
+      <div class="sidebar-sep"></div>
+
+      <div class="sidebar-bottom">
+        <div class="s-dot-mini" :class="{ active: running }"></div>
+        <span class="vtag-side">v1.0.0</span>
+      </div>
+    </aside>
+
+    <!-- ═══ APP SHELL ═══ -->
+    <div class="app-shell">
+
+      <!-- ── TOPBAR ── -->
+      <div class="topbar">
+        <div class="topbar-left">
+          <span class="page-title" x-text="pageTitle"></span>
+          <span class="breadcrumb">Wifly / <span x-text="pageBreadcrumb"></span></span>
+        </div>
+        <div class="topbar-right">
+          <div class="status-badge" :class="{ active: running }">
+            <div class="s-dot"></div>
+            <span x-text="running ? 'Online' : 'Inactive'"></span>
+          </div>
+          <div class="topbar-clock" x-text="clock"></div>
+        </div>
+      </div>
+
+      <!-- ═══════════════════════════════════
+             PAGE: DASHBOARD
+        ═══════════════════════════════════ -->
+      <div class="page-view" :class="{ active: page === 'dashboard' }">
+        <div class="dash-content">
+          <!-- LEFT COL -->
+          <div class="left-col">
+
+            <!-- Hotspot configuration -->
+            <div class="section">
+              <div class="section-hdr"><span class="shdr-lbl">Hotspot Configuration</span></div>
+              <div class="section-body">
+                <div class="field-row">
+                  <label class="field-label" for="ssid-input">Network Name (SSID)</label>
+                  <input class="field-input" id="ssid-input" type="text" placeholder="Wifly" maxlength="32"
+                    spellcheck="false" x-model="ssid" :disabled="running" />
+                </div>
+                <div class="fields-row2">
+                  <div class="field-row">
+                    <label class="field-label" for="pass-input">Password</label>
+                    <div class="pass-wrap">
+                      <input class="field-input" id="pass-input" type="password" placeholder="wifly1234" maxlength="63"
+                        spellcheck="false" x-model="password" :disabled="running" />
+                      <button class="eye-btn" @click="togglePass()" title="Show/hide">
+                        <i data-lucide="eye" id="eye-icon" style="width:14px;height:14px"></i>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="field-row">
+                    <label class="field-label" for="port-input">Port</label>
+                    <input class="field-input" id="port-input" type="number" placeholder="5000" min="1024" max="65535"
+                      x-model.number="port" :disabled="running" />
+                  </div>
+                </div>
+                
+                <div class="field-row" style="margin-top: 12px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 12px;">
+                  <label class="field-label">Client Uploads Directory</label>
+                  <div style="display: flex; gap: 8px; align-items: center;">
+                    <input class="field-input" type="text" readonly x-model="sharedDir" style="flex: 1; opacity: 0.7; cursor: default; font-size: 11px; padding: 6px 12px;" />
+                    <button class="btn-sub" @click="changeDirectory()" style="white-space: nowrap; padding: 6px 12px; font-size: 11px;">Change Folder</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Server control -->
+            <div class="section">
+              <div class="section-hdr"><span class="shdr-lbl">Server Control</span></div>
+              <div class="section-body">
+                <button class="btn-main" :class="{ running: running }" @click="toggleServer()" :disabled="loading">
+                  <template x-if="!loading">
+                    <div style="display:flex;align-items:center;gap:9px">
+                      <div class="pdot"></div>
+                      <span x-text="running ? 'STOP' : 'START'"></span>
+                    </div>
+                  </template>
+                  <template x-if="loading">
+                    <div style="display:flex;align-items:center;gap:8px">
+                      <div class="spin"></div><span style="font-size:10px">Starting...</span>
+                    </div>
+                  </template>
+                </button>
+                <div class="info-grid">
+                  <div class="info-card">
+                    <div class="info-lbl">IP LAN</div>
+                    <div class="info-val hl" x-text="serverIp || '—'"></div>
+                  </div>
+                  <div class="info-card">
+                    <div class="info-lbl">Port</div>
+                    <div class="info-val hl" x-text="serverPort ? String(serverPort) : '—'"></div>
+                  </div>
+                  <div class="info-card">
+                    <div class="info-lbl">Active SSID</div>
+                    <div class="info-val" x-text="(running && ssid) ? ssid : '—'"></div>
+                  </div>
+                  <div class="info-card">
+                    <div class="info-lbl">Devices</div>
+                    <div class="info-val" x-text="deviceCount"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Wi-Fi credentials -->
+            <div class="section">
+              <div class="section-hdr">
+                <span class="shdr-lbl" style="gap:6px">
+                  <i data-lucide="wifi" style="width:10px;height:10px;color:inherit"></i>
+                  Wi-Fi Credentials
+                </span>
+              </div>
+              <div class="section-body">
+                <div class="wifi-cred-grid">
+                  <div class="wcred" :class="{ active: running }">
+                    <div class="wcred-lbl">Network</div>
+                    <div class="wcred-val" :class="{ dim: !running }" x-text="(running && ssid) ? ssid : '—'"
+                      id="wc-ssid-val"></div>
+                    <button class="wcopy" @click="copyEl('wc-ssid-val','SSID copied')" title="Copy">
+                      <i data-lucide="copy" style="width:11px;height:11px"></i>
+                    </button>
+                  </div>
+                  <div class="wcred" :class="{ active: running }">
+                    <div class="wcred-lbl">Password</div>
+                    <div class="wcred-val" :class="{ dim: !running }" x-text="(running && password) ? password : '—'"
+                      id="wc-pass-val"></div>
+                    <button class="wcopy" @click="copyEl('wc-pass-val','Password copied')" title="Copy">
+                      <i data-lucide="copy" style="width:11px;height:11px"></i>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- QR code — Enlarged for desktop -->
+            <div class="qr-wrap-section">
+              <div class="qr-box" :class="qrUrlData ? 'filled' : 'empty'">
+                <div class="qr-ph" x-show="!qrUrlData">
+                  <i data-lucide="qr-code" style="width:36px;height:36px;opacity:0.25;color:currentColor"></i>
+                  <p>Start to<br />generate QR</p>
+                </div>
+                <img :src="qrUrlData" x-show="qrUrlData" style="width: 164px; height: 164px; border-radius: 4px;" />
+              </div>
+              <div class="qr-info">
+                <div class="qr-label">
+                  <i data-lucide="scan" style="width:9px;height:9px;color:inherit"></i>
+                  Scan to connect
+                </div>
+                <div class="ip-pill" :class="{ empty: !running }" @click="copyPill()">
+                  <i data-lucide="link" style="width:9px;height:9px"></i>
+                  <span x-text="running && serverIp ? 'http://' + serverIp + ':' + serverPort : 'Waiting...'">
+                  </span>
+                </div>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- RIGHT AREA -->
+          <div class="right-area">
+            <!-- Upload panel — Files to Send -->
+            <div class="upload-panel">
+              <div class="panel-hdr">
+                <span class="phdr-lbl">Files to Send</span>
+                <span class="cnt-badge" x-text="countBadge"></span>
+              </div>
+              <div class="drop-zone" id="drop-zone" @click="handleFiles()">
+                <div class="drop-icon-ring">
+                  <i data-lucide="upload" style="width:20px;height:20px;color:#00e5c0"></i>
+                </div>
+                <div class="drop-title">Drop files here</div>
+                <div class="drop-sub">Click to browse · Drag and drop · All formats</div>
+              </div>
+              <div class="global-progress" :class="{ show: globalProgress.show }">
+                <div class="gp-row">
+                  <span class="gp-label">Uploading</span>
+                  <span class="gp-pct" x-text="globalProgress.pct + '%'"></span>
+                </div>
+                <div class="gp-bar-wrap">
+                  <div class="gp-bar" :style="'width:' + globalProgress.pct + '%'"></div>
+                </div>
+                <span class="gp-info" x-text="globalProgress.info"></span>
+              </div>
+              <div class="upload-queue" id="upload-queue"></div>
+            </div>
+
+            <!-- Files panel — Shared Files -->
+            <div class="files-panel">
+              <div class="panel-hdr">
+                <span class="phdr-lbl">Shared Files</span>
+                <span class="cnt-badge"
+                  x-text="sharedFiles.length + ' file' + (sharedFiles.length > 1 ? 's' : '')"></span>
+              </div>
+              <div class="file-list" id="file-list">
+                <div class="empty-state" x-show="sharedFiles.length === 0">
+                  <i data-lucide="folder-open" style="width:32px;height:32px;opacity:0.2;color:currentColor"></i>
+                  <p>No shared files</p>
+                </div>
+                <template x-for="(f, i) in sharedFiles" :key="f.name + f.size">
+                  <div class="file-item">
+                    <div class="fi-icon" x-text="getEmoji(f.name)"></div>
+                    <div class="fi-meta">
+                      <div class="fi-name" x-text="f.name"></div>
+                      <div class="fi-sz" x-text="fmtSize(f.size)"></div>
+                    </div>
+                    <span class="fi-badge ready">Shared</span>
+                    <button class="fi-rm" @click="removeSharedFile(i)" title="Remove">×</button>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════════════════════════════
+             PAGE: Connected Devices
+        ═══════════════════════════════════ -->
+      <div class="page-view" :class="{ active: page === 'devices' }">
+        <div class="devices-page">
+          <div class="devices-header">
+            <h2>Connected Devices</h2>
+            <span class="devices-count" x-text="deviceCount + ' device' + (deviceCount > 1 ? 's' : '')"></span>
+          </div>
+
+          <div class="device-list" x-show="devices.length > 0">
+            <template x-for="(dev, i) in devices" :key="dev.ip">
+              <div class="device-card">
+                <div class="device-icon-wrap">
+                  <i :data-lucide="dev.icon || 'smartphone'"></i>
+                </div>
+                <div class="device-info">
+                  <div class="device-name" x-text="dev.name"></div>
+                  <div class="device-meta">
+                    <span>
+                      <i data-lucide="globe" style="width:11px;height:11px"></i>
+                      <span x-text="dev.ip"></span>
+                    </span>
+                    <span>
+                      <i data-lucide="clock" style="width:11px;height:11px"></i>
+                      <span x-text="dev.connectedAt"></span>
+                    </span>
+                    <span>
+                      <i data-lucide="arrow-down-up" style="width:11px;height:11px"></i>
+                      <span x-text="fmtSize(dev.transfer || 0)"></span>
+                    </span>
+                  </div>
+                </div>
+                <div class="device-status">
+                  <div class="ds-dot"></div>
+                  Connected
+                </div>
+              </div>
+            </template>
+          </div>
+
+          <div class="devices-empty" x-show="devices.length === 0">
+            <i data-lucide="wifi-off" style="width:48px;height:48px;color:currentColor;opacity:0.15"></i>
+            <p x-text="running ? 'No devices connected yet' : 'Start the server to see connected devices'"></p>
+          </div>
+        </div>
+      </div>
+
+
+
+      <!-- ═══ FOOTER BAR ═══ -->
+      <div class="footer-bar">
+        <div class="fb-left">
+          <div class="fb-status">
+            <div class="fb-dot" :class="{ active: running }"></div>
+            <span x-text="running ? 'Server active' : 'Inactive'"></span>
+          </div>
+          <div class="fb-sep"></div>
+          <div class="fb-item">
+            <i data-lucide="smartphone" style="width:10px;height:10px;color:var(--cyan)"></i>
+            <span>Devices:</span>
+            <span class="fb-val cyan" x-text="deviceCount"></span>
+          </div>
+          <div class="fb-item">
+            <i data-lucide="file" style="width:10px;height:10px;color:var(--green)"></i>
+            <span>Files:</span>
+            <span class="fb-val green" x-text="sharedFiles.length"></span>
+          </div>
+          <div class="fb-item">
+            <i data-lucide="arrow-left-right" style="width:10px;height:10px;color:var(--blue)"></i>
+            <span>Transferred:</span>
+            <span class="fb-val blue" x-text="fmtSize(totalTransfer)"></span>
+          </div>
+          <div class="fb-item">
+            <i data-lucide="timer" style="width:10px;height:10px;color:var(--amber)"></i>
+            <span>Uptime:</span>
+            <span class="fb-val amber" x-text="uptimeStr"></span>
+          </div>
+        </div>
+        <div class="fb-right">
+          <span class="fb-url" :class="{ show: running && serverUrl }" x-text="serverUrl"></span>
+          <div class="fb-sep"></div>
+          <span class="fb-item" style="border:none;background:none;padding:0">
+            <i data-lucide="clock" style="width:10px;height:10px"></i>
+            <span x-text="clock"></span>
+          </span>
+          <div class="fb-sep"></div>
+          <span class="fb-item" style="border:none;background:none;padding:0;color:var(--muted)">
+            <i data-lucide="code" style="width:10px;height:10px"></i> Developed by Aina
+          </span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Desktop drag-and-drop overlay -->
+  <div class="desktop-drop-overlay" id="desktop-drop-overlay">
+    <div class="ddo-icon">
+      <i data-lucide="upload" style="width:36px;height:36px;color:var(--cyan)"></i>
+    </div>
+    <div class="ddo-text">Drop files to share</div>
+    <div class="ddo-sub">They will be automatically sent to the server</div>
+  </div>
+
+  <!-- TOAST -->
+  <div class="toast" id="toast"></div>
+
+</body>
+
+</html>
