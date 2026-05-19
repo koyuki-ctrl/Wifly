@@ -105,6 +105,40 @@ function wiflyApp() {
           self.sharedFiles = status.shared_files || [];
         } catch (e) { console.error('Error refreshing devices', e); }
       });
+
+      // Desktop drag and drop events
+      const dropOverlay = document.getElementById('desktop-drop-overlay');
+      
+      listen('tauri://drag-enter', () => {
+        if (!self.running) return;
+        if (dropOverlay) dropOverlay.classList.add('active');
+      });
+      
+      listen('tauri://drag-leave', () => {
+        if (dropOverlay) dropOverlay.classList.remove('active');
+      });
+      
+      listen('tauri://drag-drop', async (event) => {
+        if (dropOverlay) dropOverlay.classList.remove('active');
+        if (!self.running) {
+            self.toast('Start the server to share files!');
+            return;
+        }
+        
+        const paths = event.payload.paths;
+        if (paths && paths.length > 0) {
+            for (let p of paths) {
+                try {
+                    await invoke('add_shared_file', { path: p });
+                } catch (e) {
+                    console.error('Failed to add file:', e);
+                }
+            }
+            var status = await invoke('get_status');
+            self.sharedFiles = status.shared_files || [];
+            self.toast(paths.length + ' file(s) shared!');
+        }
+      });
     },
 
     refreshIcons() {

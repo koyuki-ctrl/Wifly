@@ -101,13 +101,23 @@ fn get_status(
     let s = state.0.lock().map_err(|e| e.to_string())?;
     let mut status_json = serde_json::to_value(s.get_status()).unwrap();
     
-    // Inject connected devices
+    // Inject HTTP-tracked devices
     if let serde_json::Value::Object(ref mut map) = status_json {
         let devices: Vec<_> = s.connected_devices.values().cloned().collect();
         map.insert("devices_list".to_string(), serde_json::to_value(devices).unwrap());
     }
     
     Ok(status_json)
+}
+
+/// Get the list of devices connected to the WiFi hotspot
+#[tauri::command]
+async fn get_connected_devices() -> Result<serde_json::Value, String> {
+    let devices = hotspot::get_connected_devices().await;
+    Ok(serde_json::json!({
+        "count": devices.len(),
+        "devices": devices
+    }))
 }
 
 /// Add a file to the shared files list
@@ -251,6 +261,7 @@ pub fn run() {
             start_server,
             stop_server,
             get_status,
+            get_connected_devices,
             add_shared_file,
             remove_shared_file,
             list_shared_files,
