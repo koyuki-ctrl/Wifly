@@ -83,8 +83,8 @@ function wiflyApp() {
             self.running = true;
             self.ssid = status.ssid || '';
             self.password = status.password || '';
-            self.ip = status.server_ip || '';
-            self.port = status.server_port || 5000;
+            self.serverIp = status.ip || '';
+            self.serverPort = status.port || 5000;
             self.deviceCount = status.connected_devices || 0;
             self.devices = status.devices_list || [];
             self.hotspotActive = status.hotspot_active || false;
@@ -237,6 +237,12 @@ function wiflyApp() {
 
     clearQR() {
       this.qrUrlData = '';
+    },
+
+    generateQR() {
+      if (this.running && this.serverIp && this.serverPort) {
+        this.renderQR('http://' + this.serverIp + ':' + this.serverPort);
+      }
     },
 
     /* Polling — fetch status from Rust backend */

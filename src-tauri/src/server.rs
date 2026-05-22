@@ -4,7 +4,7 @@ use actix::{Actor, StreamHandler};
 use actix_web_actors::ws;
 use tauri::Emitter;
 use futures_util::StreamExt;
-use std::io::Write;
+use std::io::{Write, Read, Seek, SeekFrom};
 
 use crate::state::{AppState, SharedFile, ConnectedDevice};
 
@@ -70,21 +70,27 @@ async fn mobile_page(
     if files.is_empty() {
         file_rows.push_str(r#"<div class="empty"><p>📂 No files shared yet</p><p class="sub">Files will appear here when shared from the desktop app</p></div>"#);
     } else {
-        for f in files.iter() {
+        for (idx, f) in files.iter().enumerate() {
             let size_str = format_size(f.size);
             let emoji = get_file_emoji(&f.name);
             file_rows.push_str(&format!(
-                r#"<a href="/api/download/{name}" class="file-card" download>
+                r#"<div class="file-card" id="fc-{idx}" onclick="downloadFile('{name}', {size}, {idx})">
                     <div class="file-icon">{emoji}</div>
                     <div class="file-info">
                         <div class="file-name">{name}</div>
-                        <div class="file-size">{size}</div>
+                        <div class="file-size">{size_str}</div>
+                        <div class="file-progress" id="fp-{idx}" style="display:none">
+                            <div class="fp-bar-bg"><div class="fp-bar" id="fpb-{idx}"></div></div>
+                            <span class="fp-text" id="fpt-{idx}">0%</span>
+                        </div>
                     </div>
-                    <div class="dl-icon">⬇</div>
-                </a>"#,
+                    <div class="dl-icon" id="dli-{idx}">⬇</div>
+                </div>"#,
                 name = html_escape(&f.name),
                 emoji = emoji,
-                size = size_str
+                size_str = size_str,
+                size = f.size,
+                idx = idx
             ));
         }
     }
@@ -121,13 +127,15 @@ async fn mobile_page(
         .upload-btn {{ width: 100%; padding: 16px; background: rgba(0,229,192,0.1); border: 1.5px solid rgba(0,229,192,0.3); border-radius: 14px; color: #00e5c0; font-size: 14px; font-weight: 600; cursor: pointer; text-align: center; transition: all 0.2s; -webkit-tap-highlight-color: transparent; }}
         .upload-btn:active {{ background: rgba(0,229,192,0.2); }}
         
-        /* Progress UI */
-        #progress-container {{ display: none; margin-bottom: 16px; padding: 16px; background: #13161d; border: 1px solid rgba(0,229,192,0.3); border-radius: 14px; }}
-        .prog-label {{ font-size: 13px; font-weight: 600; color: #e6e9f0; margin-bottom: 8px; display: flex; justify-content: space-between; }}
-        .prog-filename {{ color: #00e5c0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 70%; }}
-        .prog-bar-bg {{ width: 100%; height: 6px; background: rgba(255,255,255,0.1); border-radius: 100px; overflow: hidden; }}
-        .prog-bar-fill {{ height: 100%; background: #00e5c0; width: 0%; transition: width 0.1s linear; }}
-        
+        /* Download progress per file */
+        .file-progress {{ display: flex; align-items: center; gap: 8px; margin-top: 6px; }}
+        .fp-bar-bg {{ flex: 1; height: 4px; background: rgba(255,255,255,0.08); border-radius: 100px; overflow: hidden; }}
+        .fp-bar {{ height: 100%; background: linear-gradient(90deg, #00e5c0, #00b894); width: 0%; transition: width 0.15s linear; border-radius: 100px; }}
+        .fp-text {{ font-size: 11px; color: #00e5c0; font-weight: 600; min-width: 32px; text-align: right; }}
+        .file-card.downloading {{ border-color: rgba(0,229,192,0.25); background: #161a24; pointer-events: none; }}
+        .file-card.done {{ border-color: rgba(0,229,192,0.4); }}
+        .file-card.done .dl-icon {{ background: rgba(0,229,192,0.25); }}
+
         .footer {{ text-align: center; padding: 20px; font-size: 11px; color: #3a3f4a; }}
     </style>
 </head>
@@ -141,14 +149,12 @@ async fn mobile_page(
     </div>
     <div class="files">{files}</div>
     <div class="upload-section">
-        <div id="progress-container">
-            <div class="prog-label">
-                <span class="prog-filename" id="prog-filename">Uploading...</span>
-                <span id="prog-pct">0%</span>
+        <div id="upload-progress" style="display:none; margin-bottom:12px; padding:14px; background:#13161d; border:1px solid rgba(0,229,192,0.3); border-radius:14px;">
+            <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;margin-bottom:8px;">
+                <span style="color:#00e5c0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:70%;" id="up-name">Uploading...</span>
+                <span id="up-pct">0%</span>
             </div>
-            <div class="prog-bar-bg">
-                <div class="prog-bar-fill" id="prog-bar-fill"></div>
-            </div>
+            <div class="fp-bar-bg" style="height:6px;"><div class="fp-bar" id="up-bar" style="height:100%;"></div></div>
         </div>
         <form id="upload-form" enctype="multipart/form-data">
             <input type="file" id="file-input" multiple style="display:none" onchange="uploadFiles(this.files)">
@@ -159,73 +165,122 @@ async fn mobile_page(
     </div>
     <div class="footer">Wifly v1.0.0 · Powered by Tauri</div>
     <script>
+        function fmtSpeed(bps) {{
+            if (bps < 1024) return bps.toFixed(0) + ' B/s';
+            if (bps < 1048576) return (bps/1024).toFixed(1) + ' KB/s';
+            return (bps/1048576).toFixed(1) + ' MB/s';
+        }}
+
+        async function downloadFile(name, totalSize, idx) {{
+            const card = document.getElementById('fc-' + idx);
+            const prog = document.getElementById('fp-' + idx);
+            const bar = document.getElementById('fpb-' + idx);
+            const text = document.getElementById('fpt-' + idx);
+            const icon = document.getElementById('dli-' + idx);
+            if (!card || card.classList.contains('downloading')) return;
+
+            card.classList.add('downloading');
+            prog.style.display = 'flex';
+            icon.textContent = '⏳';
+
+            try {{
+                const res = await fetch('/api/download/' + encodeURIComponent(name));
+                if (!res.ok) throw new Error('Download failed');
+
+                const reader = res.body.getReader();
+                const chunks = [];
+                let received = 0;
+                let lastTime = Date.now();
+                let lastBytes = 0;
+
+                while (true) {{
+                    const {{ done, value }} = await reader.read();
+                    if (done) break;
+                    chunks.push(value);
+                    received += value.length;
+
+                    const pct = totalSize > 0 ? Math.round((received / totalSize) * 100) : 0;
+                    bar.style.width = pct + '%';
+
+                    const now = Date.now();
+                    const dt = (now - lastTime) / 1000;
+                    if (dt >= 0.3) {{
+                        const speed = (received - lastBytes) / dt;
+                        text.textContent = pct + '% · ' + fmtSpeed(speed);
+                        lastTime = now;
+                        lastBytes = received;
+                    }}
+                }}
+
+                // Combine chunks and trigger download
+                const blob = new Blob(chunks);
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url; a.download = name;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+
+                bar.style.width = '100%';
+                text.textContent = '✓ Done';
+                icon.textContent = '✅';
+                card.classList.remove('downloading');
+                card.classList.add('done');
+            }} catch(e) {{
+                text.textContent = 'Error';
+                icon.textContent = '❌';
+                card.classList.remove('downloading');
+                alert('Download failed: ' + e.message);
+            }}
+        }}
+
         window.isUploading = false;
         async function uploadFiles(files) {{
             if (!files || files.length === 0) return;
             window.isUploading = true;
-            
             const btn = document.getElementById('upload-btn');
-            const progCont = document.getElementById('progress-container');
-            const progFill = document.getElementById('prog-bar-fill');
-            const progPct = document.getElementById('prog-pct');
-            const progName = document.getElementById('prog-filename');
-            
+            const prog = document.getElementById('upload-progress');
+            const bar = document.getElementById('up-bar');
+            const pctEl = document.getElementById('up-pct');
+            const nameEl = document.getElementById('up-name');
             btn.style.display = 'none';
-            progCont.style.display = 'block';
-            
+            prog.style.display = 'block';
             let allSuccess = true;
-            
             for (let i = 0; i < files.length; i++) {{
                 const file = files[i];
-                progName.textContent = file.name;
-                
-                // 5MB chunks
+                nameEl.textContent = file.name;
                 const chunkSize = 5 * 1024 * 1024;
                 const totalChunks = Math.ceil(file.size / chunkSize) || 1;
-                
-                for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {{
-                    const start = chunkIdx * chunkSize;
+                for (let c = 0; c < totalChunks; c++) {{
+                    const start = c * chunkSize;
                     const end = Math.min(start + chunkSize, file.size);
                     const chunk = file.slice(start, end);
-                    
-                    const url = `/api/upload_chunk?name=${{encodeURIComponent(file.name)}}&chunk=${{chunkIdx}}&total=${{totalChunks}}`;
-                    
+                    const url = `/api/upload_chunk?name=${{encodeURIComponent(file.name)}}&chunk=${{c}}&total=${{totalChunks}}`;
                     try {{
                         const res = await fetch(url, {{ method: 'POST', body: chunk }});
-                        if (!res.ok) {{
-                            const text = await res.text();
-                            throw new Error(text);
-                        }}
+                        if (!res.ok) throw new Error(await res.text());
                     }} catch(e) {{
                         allSuccess = false;
-                        alert('Upload error for ' + file.name + ': ' + e.message);
+                        alert('Upload error: ' + e.message);
                         break;
                     }}
-                    
-                    const pct = Math.round(((chunkIdx + 1) / totalChunks) * 100);
-                    progFill.style.width = pct + '%';
-                    progPct.textContent = pct + '%';
+                    const pct = Math.round(((c + 1) / totalChunks) * 100);
+                    bar.style.width = pct + '%';
+                    pctEl.textContent = pct + '%';
                 }}
             }}
-            
-            if (allSuccess) {{
-                location.reload();
-            }} else {{
-                btn.style.display = 'block';
-                progCont.style.display = 'none';
-            }}
+            if (allSuccess) location.reload();
+            else {{ btn.style.display = 'block'; prog.style.display = 'none'; }}
             window.isUploading = false;
         }}
 
-        // WebSocket connection for presence
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = protocol + '//' + location.host + '/ws/';
         let ws;
         function connectWs() {{
             ws = new WebSocket(wsUrl);
-            ws.onclose = () => {{
-                setTimeout(connectWs, 2000); // Reconnect
-            }};
+            ws.onclose = () => {{ setTimeout(connectWs, 2000); }};
         }}
         connectWs();
     </script>
@@ -252,48 +307,93 @@ async fn list_files(
     HttpResponse::Ok().json(&*files)
 }
 
-/// API: Download a specific file
+/// API: Download a specific file — optimized streaming with Range support
 async fn download_file(
     req: HttpRequest,
     data: web::Data<std::sync::Arc<std::sync::Mutex<AppState>>>,
     path: web::Path<String>,
-) -> Result<actix_files::NamedFile, Error> {
+) -> HttpResponse {
     track_client(&req, &data);
     let filename = path.into_inner();
-    
-    // We need to clone the file path and size to avoid holding the MutexGuard across await/response
+
     let (file_path, file_size) = {
         let state = data.lock().unwrap();
         if let Some(file) = state.shared_files.iter().find(|f| f.name == filename) {
             (file.path.clone(), file.size)
         } else {
-            return Err(actix_web::error::ErrorNotFound("File not in shared list"));
+            return HttpResponse::NotFound().body("File not in shared list");
         }
     };
 
     if !file_path.exists() {
-        return Err(actix_web::error::ErrorNotFound("File not found on disk"));
+        return HttpResponse::NotFound().body("File not found on disk");
     }
 
-    // Update transfer stats eagerly since we stream the file
+    // Parse Range header
+    let range = req.headers().get("range").and_then(|v| v.to_str().ok());
+    let (start, end) = if let Some(range_str) = range {
+        parse_range(range_str, file_size)
+    } else {
+        (0, file_size - 1)
+    };
+
+    let content_length = end - start + 1;
+    let is_partial = range.is_some();
+
+    // Update transfer stats
     {
         let mut state = data.lock().unwrap();
         let ip = get_client_ip(&req);
         if let Some(client) = state.connected_devices.get_mut(&ip) {
             client.last_seen = chrono::Local::now().format("%H:%M").to_string();
-            client.transfer += file_size;
+            client.transfer += content_length;
         }
-        state.total_transfer += file_size;
+        state.total_transfer += content_length;
     }
 
-    // NamedFile streams the file securely and efficiently without loading it into RAM
-    let named_file = actix_files::NamedFile::open(file_path)?
-        .set_content_disposition(actix_web::http::header::ContentDisposition {
-            disposition: actix_web::http::header::DispositionType::Attachment,
-            parameters: vec![actix_web::http::header::DispositionParam::Filename(filename)],
-        });
+    // Stream file in 256KB chunks
+    let file_path_clone = file_path.clone();
+    let stream = futures_util::stream::unfold(
+        (file_path_clone, start, end + 1),
+        move |(path, pos, end_pos)| async move {
+            if pos >= end_pos {
+                return None;
+            }
+            let chunk_size = std::cmp::min(256 * 1024, (end_pos - pos) as usize);
+            let mut file = match std::fs::File::open(&path) {
+                Ok(f) => f,
+                Err(e) => return Some((Err(actix_web::error::ErrorInternalServerError(e)), (path, end_pos, end_pos))),
+            };
+            if let Err(e) = file.seek(SeekFrom::Start(pos)) {
+                return Some((Err(actix_web::error::ErrorInternalServerError(e)), (path, end_pos, end_pos)));
+            }
+            let mut buf = vec![0u8; chunk_size];
+            match file.read(&mut buf) {
+                Ok(0) => None,
+                Ok(n) => {
+                    buf.truncate(n);
+                    Some((Ok(actix_web::web::Bytes::from(buf)), (path, pos + n as u64, end_pos)))
+                }
+                Err(e) => Some((Err(actix_web::error::ErrorInternalServerError(e)), (path, end_pos, end_pos))),
+            }
+        },
+    );
 
-    Ok(named_file)
+    let mut builder = if is_partial {
+        let mut r = HttpResponse::PartialContent();
+        r.insert_header(("Content-Range", format!("bytes {}-{}/{}", start, end, file_size)));
+        r
+    } else {
+        HttpResponse::Ok()
+    };
+
+    builder
+        .insert_header(("Content-Length", content_length.to_string()))
+        .insert_header(("Accept-Ranges", "bytes"))
+        .insert_header(("Content-Type", "application/octet-stream"))
+        .insert_header(("Content-Disposition", format!("attachment; filename=\"{}\"", filename)))
+        .insert_header(("Cache-Control", "no-cache"))
+        .streaming(stream)
 }
 
 #[derive(serde::Deserialize)]
@@ -446,6 +546,35 @@ fn get_file_emoji(name: &str) -> &'static str {
         "apk" => "📱",
         _ => "📦",
     }
+}
+
+fn parse_range(range_str: &str, file_size: u64) -> (u64, u64) {
+    // Parse "bytes=START-END" or "bytes=START-" or "bytes=-SUFFIX"
+    let range_str = range_str.trim();
+    if let Some(bytes_part) = range_str.strip_prefix("bytes=") {
+        let parts: Vec<&str> = bytes_part.splitn(2, '-').collect();
+        if parts.len() == 2 {
+            let start_str = parts[0].trim();
+            let end_str = parts[1].trim();
+            if start_str.is_empty() {
+                // bytes=-500 → last 500 bytes
+                if let Ok(suffix) = end_str.parse::<u64>() {
+                    let start = file_size.saturating_sub(suffix);
+                    return (start, file_size - 1);
+                }
+            } else if let Ok(start) = start_str.parse::<u64>() {
+                let end = if end_str.is_empty() {
+                    file_size - 1
+                } else {
+                    end_str.parse::<u64>().unwrap_or(file_size - 1).min(file_size - 1)
+                };
+                if start <= end && start < file_size {
+                    return (start, end);
+                }
+            }
+        }
+    }
+    (0, file_size - 1)
 }
 
 fn html_escape(s: &str) -> String {
